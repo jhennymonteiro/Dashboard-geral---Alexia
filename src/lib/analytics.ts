@@ -368,78 +368,89 @@ export function calculateConversionSteps(leads: Lead[]) {
 export function calculateBottlenecks(leads: Lead[]) {
   if (leads.length === 0) {
     return {
-      worstStep: 'Entrada → Negócio Perdido',
-      fromStage: 'Entrada' as FunnelStage,
-      toStage: 'Negócio Perdido' as FunnelStage,
+      worstStep: 'Sem Evasão',
+      fromStage: 'Nenhum' as FunnelStage,
+      toStage: 'Sem Perdas' as FunnelStage,
       lostQuantity: 0,
       lostPct: 0,
       summaryMessage: 'Nenhum lead cadastrado para análise de gargalos.'
     };
   }
 
-  const funnel = calculateFunnelMetrics(leads);
-  const entradaPassed = funnel.find(f => f.stage === 'Entrada')?.countPassed || 0;
-  const conexaoPassed = funnel.find(f => f.stage === 'Conexão')?.countPassed || 0;
-  const avaliacaoPassed = funnel.find(f => f.stage === 'Avaliação')?.countPassed || 0;
-  const followPassed = funnel.find(f => f.stage === 'Follow Up')?.countPassed || 0;
-  const fechadoPassed = funnel.find(f => f.stage === 'Negócio Fechado')?.countPassed || 0;
+  // Filter actual lost leads (leads with fase === 'Negócio Perdido')
+  const lostLeads = leads.filter(l => l.fase === 'Negócio Perdido');
 
-  const lossSteps = [
-    {
-      from: 'Entrada' as FunnelStage,
-      to: 'Negócio Perdido' as FunnelStage,
-      title: 'Entrada → Negócio Perdido',
-      countFrom: entradaPassed,
-      lostQuantity: Math.max(0, entradaPassed - conexaoPassed),
-      lostPct: entradaPassed > 0 ? ((entradaPassed - conexaoPassed) / entradaPassed) * 100 : 0
-    },
-    {
-      from: 'Conexão' as FunnelStage,
-      to: 'Negócio Perdido' as FunnelStage,
-      title: 'Conexão → Negócio Perdido',
-      countFrom: conexaoPassed,
-      lostQuantity: Math.max(0, conexaoPassed - avaliacaoPassed),
-      lostPct: conexaoPassed > 0 ? ((conexaoPassed - avaliacaoPassed) / conexaoPassed) * 100 : 0
-    },
-    {
-      from: 'Avaliação' as FunnelStage,
-      to: 'Negócio Perdido' as FunnelStage,
-      title: 'Avaliação → Negócio Perdido',
-      countFrom: avaliacaoPassed,
-      lostQuantity: Math.max(0, avaliacaoPassed - followPassed),
-      lostPct: avaliacaoPassed > 0 ? ((avaliacaoPassed - followPassed) / avaliacaoPassed) * 100 : 0
-    },
-    {
-      from: 'Follow Up' as FunnelStage,
-      to: 'Negócio Perdido' as FunnelStage,
-      title: 'Follow Up → Negócio Perdido',
-      countFrom: followPassed,
-      lostQuantity: Math.max(0, followPassed - fechadoPassed),
-      lostPct: followPassed > 0 ? ((followPassed - fechadoPassed) / followPassed) * 100 : 0
-    }
-  ];
+  if (lostLeads.length === 0) {
+    return {
+      worstStep: 'Sem Evasão',
+      fromStage: 'Nenhum' as FunnelStage,
+      toStage: 'Sem Perdas' as FunnelStage,
+      lostQuantity: 0,
+      lostPct: 0,
+      summaryMessage: 'Nenhum gargalo de evasão detectado no funil atual. Não há nenhum lead no estado Negócio Perdido.'
+    };
+  }
 
-  let worst = lossSteps[0];
+  const nextStageMap: Record<string, FunnelStage> = {
+    'Entrada': 'Conexão',
+    'Conexão': 'Avaliação',
+    'Avaliação': 'Follow Up',
+    'Follow Up': 'Negócio Fechado'
+  };
 
-  lossSteps.forEach(step => {
-    if (step.countFrom > 0) {
-      if (
-        step.lostQuantity > worst.lostQuantity ||
-        (step.lostQuantity === worst.lostQuantity && step.lostPct > worst.lostPct)
-      ) {
-        worst = step;
+  const stageOrderMap: Record<string, number> = {
+    'Entrada': 0,
+    'Conexão': 1,
+    'Avaliação': 2,
+    'Follow Up': 3,
+    'Negócio Fechado': 4
+  };
+
+  const stages: FunnelStage[] = ['Entrada', 'Conexão', 'Avaliação', 'Follow Up'];
+
+  const lossByStage = stages.map((stage) => {
+    const stageLost = lostLeads.filter(l => (l.faseAnterior || 'Follow Up') === stage);
+    const lostQuantity = stageLost.length;
+
+    const reachedCount = leads.filter(l => {
+      if (l.fase !== 'Negócio Perdido') {
+        return (stageOrderMap[l.fase] ?? 0) >= (stageOrderMap[stage] ?? 0);
       }
-    }
+      const prior = l.faseAnterior || 'Follow Up';
+      return (stageOrderMap[prior] ?? 3) >= (stageOrderMap[stage] ?? 0);
+    }).length;
+
+    const lostPct = reachedCount > 0 ? (lostQuantity / reachedCount) * 100 : 0;
+    const nextStage = nextStageMap[stage] || 'Follow Up';
+
+    return {
+      from: stage,
+      to: nextStage,
+      title: `${stage} → ${nextStage}`,
+      lostQuantity,
+      lostPct,
+      reachedCount
+    };
   });
+
+  let worst = lossByStage[0];
+  for (const item of lossByStage) {
+    if (
+      item.lostQuantity > worst.lostQuantity ||
+      (item.lostQuantity === worst.lostQuantity && item.lostPct > worst.lostPct)
+    ) {
+      worst = item;
+    }
+  }
 
   if (worst.lostQuantity === 0) {
     return {
       worstStep: 'Sem Evasão',
-      fromStage: '-',
-      toStage: '-',
+      fromStage: 'Nenhum' as FunnelStage,
+      toStage: 'Sem Perdas' as FunnelStage,
       lostQuantity: 0,
       lostPct: 0,
-      summaryMessage: 'Nenhum gargalo de evasão detectado no funil atual. Todos os leads estão avançando sem perdas.'
+      summaryMessage: 'Nenhum gargalo de evasão detectado no funil atual.'
     };
   }
 
@@ -874,10 +885,9 @@ export function getWorstBottleneck(
   }
 
   const b = calculateBottlenecks(leads);
-  const stage = b.fromStage !== '-' ? b.fromStage : 'Follow Up';
   return {
-    stage,
-    nextStage: b.toStage !== '-' ? b.toStage : (nextStageMap[stage] || 'Próxima Etapa'),
+    stage: b.fromStage,
+    nextStage: b.toStage,
     lostCount: b.lostQuantity,
     lostPct: b.lostPct,
     totalProcessed: leads.length

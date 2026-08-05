@@ -45,8 +45,8 @@ import { KanbanBoard } from './components/KanbanBoard';
 import { SheetsModal } from './components/SheetsModal';
 import { LeadModal } from './components/LeadModal';
 
-const DEFAULT_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1IocSgvf5un9E6LCF6DrpCWn8Hg6ZlJpaWJNFX_MKzrE/edit?gid=0#gid=0';
-const DEFAULT_SPREADSHEET_ID = '1IocSgvf5un9E6LCF6DrpCWn8Hg6ZlJpaWJNFX_MKzrE';
+const DEFAULT_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1kYnu0PDKn9oIOOQqYi2oN4qCt9C-da0sS2P4HuXBbTE/edit?gid=0#gid=0';
+const DEFAULT_SPREADSHEET_ID = '1kYnu0PDKn9oIOOQqYi2oN4qCt9C-da0sS2P4HuXBbTE';
 
 export default function App() {
   // Theme State (Light / Dark)
