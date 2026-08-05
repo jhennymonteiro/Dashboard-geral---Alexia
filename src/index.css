@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --bg-page: #f8fafc;
+    --bg-card: #ffffff;
+    --bg-muted: #f1f5f9;
+    --border-color: #e2e8f0;
+    --text-primary: #0f172a;
+    --text-secondary: #64748b;
+    --text-muted: #94a3b8;
+    color-scheme: light;
+  }
+
+  .dark {
+    --bg-page: #0f172a;
+    --bg-card: #1e293b;
+    --bg-muted: #1e293b;
+    --border-color: #334155;
+    --text-primary: #f8fafc;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    color-scheme: dark;
+  }
+
+  * {
+    font-family: 'Montserrat', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    font-family: 'Montserrat', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg-page);
+    color: var(--text-primary);
+    transition: background-color 0.2s ease, color 0.2s ease;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}

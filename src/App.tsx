@@ -1,0 +1,630 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { AlertTriangle, RefreshCw, FileSpreadsheet } from 'lucide-react';
+import { Lead, FilterState, PeriodFilter, FunnelStage, SheetsConfig, FUNNEL_STAGES, HistoryRecord } from './types';
+import { INITIAL_MOCK_LEADS } from './data/mockLeads';
+import {
+  filterLeads,
+  calculateKpis,
+  calculateFunnelMetrics,
+  calculateHistoryMetrics,
+  getWorstBottleneck,
+  calculateLeadSources,
+  calculateComplaints,
+  calculateFinancialPipeline,
+  calculateNeighborhoods,
+  calculatePaymentMethods,
+  calculateAgeGroups,
+  getLocalTodayYYYYMMDD
+} from './lib/analytics';
+import {
+  extractSpreadsheetId,
+  fetchLeadsFromGoogleSheet,
+  fetchHistoryFromGoogleSheet,
+  syncLeadToAppsScript
+} from './lib/sheetsService';
+import {
+  getAllStandardCategories,
+  getNormalizedCategories,
+  FALLBACK_CATEGORY
+} from './lib/complaintCategories';
+
+// UI Components
+import { Header } from './components/Header';
+import { TopKpiCards } from './components/TopKpiCards';
+import { ConversionsCard } from './components/ConversionsCard';
+import { BottlenecksCard } from './components/BottlenecksCard';
+import { LeadSourceChart } from './components/LeadSourceChart';
+import { ComplaintsChart } from './components/ComplaintsChart';
+import { FinancialPipelineCard } from './components/FinancialPipelineCard';
+import { NeighborhoodsChart } from './components/NeighborhoodsChart';
+import { PaymentMethodsChart } from './components/PaymentMethodsChart';
+import { AgeGroupsChart } from './components/AgeGroupsChart';
+import { GlobalFiltersBar } from './components/GlobalFiltersBar';
+import { LeadsTable } from './components/LeadsTable';
+import { KanbanBoard } from './components/KanbanBoard';
+import { SheetsModal } from './components/SheetsModal';
+import { LeadModal } from './components/LeadModal';
+
+const DEFAULT_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1kYnu0PDKn9oIOOQqYi2oN4qCt9C-da0sS2P4HuXBbTE/edit?gid=0#gid=0';
+const DEFAULT_SPREADSHEET_ID = '1kYnu0PDKn9oIOOQqYi2oN4qCt9C-da0sS2P4HuXBbTE';
+
+export default function App() {
+  // Theme State (Light / Dark)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  }, []);
+
+  // Main Data State
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [viewMode, setViewMode] = useState<'dashboard' | 'kanban'>('dashboard');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+
+  // Google Sheets Config State
+  const [sheetsConfig, setSheetsConfig] = useState<SheetsConfig>({
+    sheetUrl: DEFAULT_SHEET_URL,
+    spreadsheetId: DEFAULT_SPREADSHEET_ID,
+    appsScriptUrl: '',
+    autoSync: true,
+    syncIntervalSeconds: 30,
+    lastSyncedAt: null,
+    isConnected: true,
+    sheetName: 'Sheet1'
+  });
+
+  // Filter State
+  const [filters, setFilters] = useState<FilterState>({
+    period: 'todos',
+    origem: null,
+    fase: null,
+    queixa: null,
+    searchQuery: '',
+    valorMin: null,
+    valorMax: null
+  });
+
+  // Modal States
+  const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
+  const [isLeadModalOpen, setIsLeadModalOpen] = useState(false);
+  const [leadToEdit, setLeadToEdit] = useState<Lead | null>(null);
+
+  // Sync / Refresh function to pull latest rows from Google Sheets with up to 3 automatic retries
+  const refreshSheetData = useCallback(async (overrideId?: string, overrideName?: string) => {
+    const idToUse = overrideId || sheetsConfig.spreadsheetId || DEFAULT_SPREADSHEET_ID;
+    const nameToUse = overrideName || sheetsConfig.sheetName || 'Sheet1';
+
+    if (!idToUse) {
+      setConnectionError('Nenhuma planilha configurada.');
+      return false;
+    }
+
+    setIsRefreshing(true);
+
+    const MAX_RETRIES = 3; // 1 initial attempt + 3 retries = 4 attempts total
+    let lastError: any = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const fetchedLeads = await fetchLeadsFromGoogleSheet(idToUse, nameToUse);
+
+        if (fetchedLeads && Array.isArray(fetchedLeads)) {
+          setLeads(fetchedLeads);
+          setSheetsConfig((prev) => ({
+            ...prev,
+            spreadsheetId: idToUse,
+            sheetName: nameToUse,
+            isConnected: true,
+            lastSyncedAt: new Date().toISOString()
+          }));
+          setConnectionError(null);
+
+          // Fetch HISTÓRICO tab asynchronously if present
+          fetchHistoryFromGoogleSheet(idToUse).then((hist) => {
+            if (hist && hist.length > 0) {
+              setHistoryRecords(hist);
+            }
+          }).catch(() => {});
+
+          // Sync with backend proxy
+          fetch('/api/leads/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ leads: fetchedLeads })
+          }).catch(() => {});
+
+          setIsRefreshing(false);
+          return true;
+        } else {
+          throw new Error('Nenhum dado retornado pela planilha.');
+        }
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Tentativa ${attempt + 1}/${MAX_RETRIES + 1} de conexão com a planilha falhou:`, err?.message || err);
+
+        // If there are remaining retries, wait briefly before retrying
+        if (attempt < MAX_RETRIES) {
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    }
+
+    // All attempts (initial + 3 retries) failed
+    setConnectionError(
+      lastError?.message || 'A conexão com a planilha do Google Sheets falhou e os dados não puderam ser carregados.'
+    );
+    setIsRefreshing(false);
+    return false;
+  }, [sheetsConfig.spreadsheetId, sheetsConfig.sheetName]);
+
+  // Load initial backend server config & leads
+  useEffect(() => {
+    async function loadInitialData() {
+      let currentId = DEFAULT_SPREADSHEET_ID;
+      let currentName = 'Sheet1';
+
+      try {
+        const configRes = await fetch('/api/config');
+        if (configRes.ok) {
+          const cfg = await configRes.json();
+          if (cfg.spreadsheetId) {
+            setSheetsConfig(cfg);
+            currentId = cfg.spreadsheetId;
+            currentName = cfg.sheetName || 'Sheet1';
+          }
+        }
+      } catch (e) {
+        // ignore config fetch error
+      }
+
+      await refreshSheetData(currentId, currentName);
+    }
+
+    loadInitialData();
+  }, [refreshSheetData]);
+
+  // Auto Sync Interval
+  useEffect(() => {
+    if (!sheetsConfig.autoSync || !sheetsConfig.spreadsheetId || connectionError) return;
+
+    const interval = setInterval(() => {
+      refreshSheetData();
+    }, (sheetsConfig.syncIntervalSeconds || 30) * 1000);
+
+    return () => clearInterval(interval);
+  }, [sheetsConfig.autoSync, sheetsConfig.spreadsheetId, sheetsConfig.syncIntervalSeconds, refreshSheetData, connectionError]);
+
+  // Handle Save Config from Sheets Modal
+  const handleSaveSheetsConfig = async (newConfig: Partial<SheetsConfig>) => {
+    const extractedId = newConfig.sheetUrl ? extractSpreadsheetId(newConfig.sheetUrl) : sheetsConfig.spreadsheetId;
+    
+    const updated: SheetsConfig = {
+      ...sheetsConfig,
+      ...newConfig,
+      spreadsheetId: extractedId || '',
+      isConnected: Boolean(extractedId || newConfig.appsScriptUrl),
+      lastSyncedAt: new Date().toISOString()
+    };
+
+    setSheetsConfig(updated);
+
+    // Persist to server
+    fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updated)
+    }).catch(() => {});
+
+    // Trigger immediate fetch if spreadsheetId changed
+    if (extractedId) {
+      setTimeout(() => refreshSheetData(extractedId, newConfig.sheetName || sheetsConfig.sheetName), 100);
+    }
+  };
+
+  // Test Connection helper for Sheets Modal
+  const handleTestConnection = async (sheetUrl: string, sheetName: string) => {
+    const id = extractSpreadsheetId(sheetUrl);
+    if (!id) {
+      return { success: false, message: 'URL ou ID da planilha inválido. Cole o link do Google Sheets.' };
+    }
+
+    try {
+      const testLeads = await fetchLeadsFromGoogleSheet(id, sheetName || 'Sheet1');
+      return {
+        success: true,
+        message: `Conexão efetuada com sucesso! ${testLeads.length} leads lidos da planilha.`,
+        count: testLeads.length
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: err?.message || 'Falha ao acessar a planilha. Verifique se está compartilhada como pública.'
+      };
+    }
+  };
+
+  // Create or Edit Lead
+  const handleSaveLead = async (leadData: Partial<Lead>) => {
+    if (leadData.id) {
+      // Edit existing
+      const updatedList = leads.map((l) => (l.id === leadData.id ? ({ ...l, ...leadData } as Lead) : l));
+      setLeads(updatedList);
+
+      // Call API & Apps Script
+      fetch(`/api/leads/${leadData.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(leadData)
+      }).catch(() => {});
+
+      if (sheetsConfig.appsScriptUrl) {
+        syncLeadToAppsScript(sheetsConfig.appsScriptUrl, 'UPDATE', leadData);
+      }
+    } else {
+      // Create new
+      const servico = leadData.servico || leadData.queixaCliente || 'Não informado';
+      const newLead: Lead = {
+        id: `lead-${Date.now()}`,
+        nome: leadData.nome || 'Novo Lead',
+        whatsapp: leadData.whatsapp || '',
+        fase: leadData.fase || 'Entrada',
+        valorEstimado: leadData.valorEstimado || 0,
+        servico,
+        queixaCliente: servico,
+        formaPagamento: leadData.formaPagamento || '',
+        idade: leadData.idade || '',
+        bairro: leadData.bairro || '',
+        observacoes: leadData.observacoes || '',
+        origemLead: leadData.origemLead || 'Outros',
+        createdAt: getLocalTodayYYYYMMDD()
+      };
+
+      setLeads((prev) => [newLead, ...prev]);
+
+      fetch('/api/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newLead)
+      }).catch(() => {});
+
+      if (sheetsConfig.appsScriptUrl) {
+        syncLeadToAppsScript(sheetsConfig.appsScriptUrl, 'CREATE', newLead);
+      }
+    }
+  };
+
+  // Advance stage helper
+  const handleAdvanceStage = (lead: Lead) => {
+    const currentIndex = FUNNEL_STAGES.indexOf(lead.fase);
+    if (currentIndex < FUNNEL_STAGES.length - 2) {
+      const nextStage = FUNNEL_STAGES[currentIndex + 1];
+      handleUpdateLeadStage(lead, nextStage);
+    }
+  };
+
+  // Direct Stage Update
+  const handleUpdateLeadStage = (lead: Lead, newStage: FunnelStage) => {
+    const priorStage = lead.fase !== 'Negócio Perdido' ? lead.fase : (lead.faseAnterior || 'Follow Up');
+    const updatedLead: Lead = { 
+      ...lead, 
+      fase: newStage,
+      faseAnterior: newStage === 'Negócio Perdido' ? priorStage : (lead.faseAnterior || lead.fase)
+    };
+    setLeads((prev) => prev.map((l) => (l.id === lead.id ? updatedLead : l)));
+
+    fetch(`/api/leads/${lead.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fase: newStage, faseAnterior: updatedLead.faseAnterior })
+    }).catch(() => {});
+
+    if (sheetsConfig.appsScriptUrl) {
+      syncLeadToAppsScript(sheetsConfig.appsScriptUrl, 'UPDATE', updatedLead);
+    }
+  };
+
+  // Delete Lead
+  const handleDeleteLead = (leadId: string) => {
+    const targetLead = leads.find((l) => l.id === leadId);
+    if (window.confirm(`Tem certeza que deseja excluir o lead "${targetLead?.nome || 'selecionado'}"?`)) {
+      setLeads((prev) => prev.filter((l) => l.id !== leadId));
+
+      fetch(`/api/leads/${leadId}`, {
+        method: 'DELETE'
+      }).catch(() => {});
+
+      if (sheetsConfig.appsScriptUrl && targetLead) {
+        syncLeadToAppsScript(sheetsConfig.appsScriptUrl, 'DELETE', targetLead);
+      }
+    }
+  };
+
+  // Derived Analytics Data
+  const filteredLeads = useMemo(() => filterLeads(leads, filters), [leads, filters]);
+  const kpis = useMemo(() => calculateKpis(filteredLeads), [filteredLeads]);
+  const funnelMetrics = useMemo(() => calculateFunnelMetrics(filteredLeads), [filteredLeads]);
+  const historySummary = useMemo(() => calculateHistoryMetrics(filteredLeads, historyRecords), [filteredLeads, historyRecords]);
+  const bottleneck = useMemo(() => getWorstBottleneck(filteredLeads, historySummary), [filteredLeads, historySummary]);
+  const leadSources = useMemo(() => calculateLeadSources(filteredLeads), [filteredLeads]);
+  const complaints = useMemo(() => calculateComplaints(filteredLeads), [filteredLeads]);
+  const financialPipeline = useMemo(() => calculateFinancialPipeline(filteredLeads), [filteredLeads]);
+  const neighborhoods = useMemo(() => calculateNeighborhoods(filteredLeads), [filteredLeads]);
+  const paymentMethods = useMemo(() => calculatePaymentMethods(filteredLeads), [filteredLeads]);
+  const ageGroups = useMemo(() => calculateAgeGroups(filteredLeads), [filteredLeads]);
+
+  const availableOrigens = useMemo(() => {
+    const set = new Set<string>();
+    leads.forEach((l) => {
+      if (l.origemLead) set.add(l.origemLead);
+    });
+    return Array.from(set).sort();
+  }, [leads]);
+
+  const availableQueixas = useMemo(() => {
+    const set = new Set<string>();
+    
+    // Always include standard categories first
+    getAllStandardCategories().forEach((cat) => set.add(cat));
+
+    // Also include any normalized category present in the dataset
+    leads.forEach((l) => {
+      const cats = getNormalizedCategories(l.servico || l.queixaCliente);
+      cats.forEach((c) => set.add(c));
+    });
+
+    return Array.from(set).sort((a, b) => {
+      if (a === FALLBACK_CATEGORY) return 1;
+      if (b === FALLBACK_CATEGORY) return -1;
+      return a.localeCompare(b, 'pt-BR');
+    });
+  }, [leads]);
+
+  if (connectionError) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans antialiased selection:bg-blue-100 selection:text-blue-900 flex flex-col justify-between transition-colors duration-200">
+        <Header
+          period={filters.period}
+          onPeriodChange={(period: PeriodFilter) => setFilters((f) => ({ ...f, period }))}
+          customStartDate={filters.customStartDate}
+          customEndDate={filters.customEndDate}
+          onCustomDateChange={(customStartDate, customEndDate) =>
+            setFilters((f) => ({ ...f, customStartDate, customEndDate }))
+          }
+          sheetsConfig={sheetsConfig}
+          onOpenSheetsModal={() => setIsSheetsModalOpen(true)}
+          onOpenNewLeadModal={() => {
+            setLeadToEdit(null);
+            setIsLeadModalOpen(true);
+          }}
+          onRefreshData={() => refreshSheetData()}
+          isRefreshing={isRefreshing}
+          viewMode={viewMode}
+          onViewModeChange={setViewMode}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+
+        <main className="max-w-2xl mx-auto px-4 py-16 text-center my-auto">
+          <div className="bg-white dark:bg-slate-800 p-8 sm:p-10 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 flex flex-col items-center">
+            <div className="p-4 bg-rose-50 dark:bg-rose-950/50 text-rose-600 dark:text-rose-400 rounded-2xl mb-5 border border-rose-100 dark:border-rose-900">
+              <AlertTriangle className="w-10 h-10" />
+            </div>
+
+            <h2 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 mb-2">
+              A conexão com a planilha falhou
+            </h2>
+
+            <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 mb-6 max-w-md leading-relaxed">
+              Não foi possível carregar os dados comercial da planilha do Google Sheets. Verifique sua conexão com a internet ou se a planilha permanece acessível.
+            </p>
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full sm:w-auto">
+              <button
+                onClick={() => refreshSheetData()}
+                disabled={isRefreshing}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white font-semibold text-xs rounded-xl shadow-xs transition-all cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                <span>Tentar novamente</span>
+              </button>
+
+              <button
+                onClick={() => setIsSheetsModalOpen(true)}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-semibold text-xs rounded-xl border border-slate-300 dark:border-slate-600 transition-all cursor-pointer"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Reconectar planilha</span>
+              </button>
+            </div>
+          </div>
+        </main>
+
+        {/* Reconnect Sheets Modal */}
+        <SheetsModal
+          isOpen={isSheetsModalOpen}
+          onClose={() => setIsSheetsModalOpen(false)}
+          config={sheetsConfig}
+          onSaveConfig={handleSaveSheetsConfig}
+          onTestConnection={handleTestConnection}
+        />
+
+        <LeadModal
+          isOpen={isLeadModalOpen}
+          onClose={() => {
+            setIsLeadModalOpen(false);
+            setLeadToEdit(null);
+          }}
+          onSave={handleSaveLead}
+          leadToEdit={leadToEdit}
+          availableOrigens={availableOrigens}
+          availableQueixas={availableQueixas}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans antialiased selection:bg-blue-100 selection:text-blue-900 transition-colors duration-200">
+      
+      {/* Header Bar */}
+      <Header
+        period={filters.period}
+        onPeriodChange={(period: PeriodFilter) => setFilters((f) => ({ ...f, period }))}
+        customStartDate={filters.customStartDate}
+        customEndDate={filters.customEndDate}
+        onCustomDateChange={(customStartDate, customEndDate) =>
+          setFilters((f) => ({ ...f, customStartDate, customEndDate }))
+        }
+        sheetsConfig={sheetsConfig}
+        onOpenSheetsModal={() => setIsSheetsModalOpen(true)}
+        onOpenNewLeadModal={() => {
+          setLeadToEdit(null);
+          setIsLeadModalOpen(true);
+        }}
+        onRefreshData={refreshSheetData}
+        isRefreshing={isRefreshing}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+
+      {/* Main Container */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        
+        {/* Global Search & Filters */}
+        <GlobalFiltersBar
+          filters={filters}
+          onFilterChange={(updated) => setFilters((f) => ({ ...f, ...updated }))}
+          onClearFilters={() =>
+            setFilters({
+              period: 'todos',
+              origem: null,
+              fase: null,
+              queixa: null,
+              searchQuery: '',
+              valorMin: null,
+              valorMax: null
+            })
+          }
+          availableOrigens={availableOrigens}
+          availableQueixas={availableQueixas}
+        />
+
+        {/* View Switch Condition */}
+        {viewMode === 'dashboard' ? (
+          <>
+            {/* Top KPI Cards Row */}
+            <TopKpiCards
+              totalLeads={kpis.totalLeads}
+              totalActiveCount={kpis.totalActiveCount}
+              totalFechadosCount={kpis.totalFechadosCount}
+              valorFechado={kpis.valorFechado}
+              totalPerdidosCount={kpis.totalPerdidosCount}
+              valorPerdido={kpis.valorPerdido}
+              valorEmNegociacao={kpis.valorEmNegociacao}
+              conversaoGeralPct={kpis.conversaoGeralPct}
+            />
+
+            {/* Sub-grid: Conversão por Etapa + Maior Gargalo */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+              <ConversionsCard
+                steps={historySummary.stageMetrics}
+                overallConversionPct={historySummary.overallConversionPct}
+              />
+              <BottlenecksCard
+                stage={bottleneck.stage}
+                nextStage={bottleneck.nextStage}
+                lostQuantity={bottleneck.lostCount}
+                lostPct={bottleneck.lostPct}
+              />
+            </div>
+
+            {/* Main Analytics Grid: Origem dos Leads, Distribuição por Serviços, Pipeline Financeiro */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <LeadSourceChart
+                sources={leadSources}
+                selectedOrigem={filters.origem}
+                onSelectOrigem={(origem) => setFilters((f) => ({ ...f, origem }))}
+              />
+
+              <ComplaintsChart
+                complaints={complaints}
+                selectedQueixa={filters.queixa}
+                onSelectQueixa={(queixa) => setFilters((f) => ({ ...f, queixa }))}
+              />
+
+              <FinancialPipelineCard
+                valorEntrada={financialPipeline.valorEntrada}
+                valorConexao={financialPipeline.valorConexao}
+                valorAvaliacao={financialPipeline.valorAvaliacao}
+                valorFollowUp={financialPipeline.valorFollowUp}
+                valorFechado={financialPipeline.valorFechado}
+                valorPerdido={financialPipeline.valorPerdido}
+                activePipeline={financialPipeline.activePipeline}
+                totalPipeline={financialPipeline.totalPipeline}
+              />
+            </div>
+
+            {/* Demographics & Payment Grid: Formas de Pagamento, Bairros, Faixa Etária */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <PaymentMethodsChart paymentMethods={paymentMethods} />
+              <NeighborhoodsChart neighborhoods={neighborhoods} />
+              <AgeGroupsChart ageGroups={ageGroups} />
+            </div>
+
+            {/* Leads Table */}
+            <LeadsTable
+              leads={filteredLeads}
+            />
+          </>
+        ) : (
+          /* Kanban Board Mode */
+          <KanbanBoard
+            leads={filteredLeads}
+            onUpdateStage={handleUpdateLeadStage}
+          />
+        )}
+
+      </main>
+
+      {/* Modals */}
+      <SheetsModal
+        isOpen={isSheetsModalOpen}
+        onClose={() => setIsSheetsModalOpen(false)}
+        config={sheetsConfig}
+        onSaveConfig={handleSaveSheetsConfig}
+        onTestConnection={handleTestConnection}
+      />
+
+      <LeadModal
+        isOpen={isLeadModalOpen}
+        onClose={() => {
+          setIsLeadModalOpen(false);
+          setLeadToEdit(null);
+        }}
+        onSave={handleSaveLead}
+        leadToEdit={leadToEdit}
+        availableOrigens={availableOrigens}
+        availableQueixas={availableQueixas}
+      />
+
+    </div>
+  );
+}
