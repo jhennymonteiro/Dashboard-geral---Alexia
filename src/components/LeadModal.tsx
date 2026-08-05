@@ -43,7 +43,7 @@ export const LeadModal: React.FC<LeadModalProps> = ({
       setWhatsapp('');
       setFase('Entrada');
       setValorEstimado(0);
-      setQueixaCliente(availableQueixas[0] || 'Harmonização Facial');
+      setQueixaCliente(availableQueixas[0] || 'Preenchimento / Ácido Hialurônico');
       setObservacoes('');
       setOrigemLead(availableOrigens[0] || 'Google Ads');
     }

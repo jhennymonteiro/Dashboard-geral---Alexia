@@ -382,10 +382,10 @@ export default function App() {
     // Always include standard categories first
     getAllStandardCategories().forEach((cat) => set.add(cat));
 
-    // Also include any normalized category present in the dataset
+    // Also include any service present in the dataset directly
     leads.forEach((l) => {
-      const cats = getNormalizedCategories(l.servico || l.queixaCliente);
-      cats.forEach((c) => set.add(c));
+      const serviceName = (l.servico || l.queixaCliente || '').trim();
+      if (serviceName) set.add(serviceName);
     });
 
     return Array.from(set).sort((a, b) => {

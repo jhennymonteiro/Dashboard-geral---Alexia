@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Lead, STAGE_COLORS } from '../types';
 import { formatCurrencyBRL } from '../lib/analytics';
-import { getNormalizedCategories } from '../lib/complaintCategories';
 import { MessageCircle } from 'lucide-react';
 
 interface LeadsTableProps {
@@ -111,21 +110,13 @@ export const LeadsTable: React.FC<LeadsTableProps> = ({
                       <div className="font-medium text-slate-800 dark:text-slate-200 truncate" title={lead.servico || lead.queixaCliente}>
                         {lead.servico || lead.queixaCliente || '-'}
                       </div>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {getNormalizedCategories(lead.servico || lead.queixaCliente).map((cat) => (
-                          <span
-                            key={cat}
-                            className="inline-block text-[10px] px-1.5 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 font-semibold"
-                          >
-                            {cat}
-                          </span>
-                        ))}
-                        {lead.bairro && (
+                      {lead.bairro && (
+                        <div className="flex flex-wrap gap-1 mt-1">
                           <span className="inline-block text-[10px] px-1.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium">
                             {lead.bairro}
                           </span>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </td>
 
                     {/* Valor Estimado */}
