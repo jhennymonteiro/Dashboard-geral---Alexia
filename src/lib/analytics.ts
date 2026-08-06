@@ -493,18 +493,24 @@ export function calculateLeadSources(leads: Lead[]) {
 }
 
 /**
- * Complaints / Services Breakdown & Ranking (Normalized Categories)
+ * Complaints / Services Breakdown & Ranking (Exact Service Grouping)
  */
 export function calculateComplaints(leads: Lead[]) {
   const map: Record<string, number> = {};
   leads.forEach((l) => {
-    const categories = getNormalizedCategories(l.servico || l.queixaCliente);
-    categories.forEach((cat) => {
-      map[cat] = (map[cat] || 0) + 1;
-    });
+    const raw = (l.servico || l.queixaCliente || 'Não informado').trim();
+    if (raw) {
+      const services = raw.includes(',')
+        ? raw.split(',').map((s) => s.trim()).filter(Boolean)
+        : [raw];
+
+      services.forEach((s) => {
+        map[s] = (map[s] || 0) + 1;
+      });
+    }
   });
 
-  const total = leads.length;
+  const total = Object.values(map).reduce((a, b) => a + b, 0);
   const items = Object.entries(map).map(([queixa, count]) => ({
     queixa,
     count,
@@ -669,8 +675,8 @@ export function formatCurrencyBRL(value: number): string {
 }
 
 export interface FunnelHistoryStageMetric {
-  stage: FunnelStage;
-  nextStage: FunnelStage;
+  stage: FunnelStage | string;
+  nextStage: FunnelStage | string;
   label: string;
   totalProcessed: number;
   advancedCount: number;
@@ -695,55 +701,49 @@ export function calculateHistoryMetrics(
   historyRecords: HistoryRecord[] = []
 ): FunnelHistorySummary {
   const hasSheetHistory = historyRecords.length > 0;
-  const mainStages: FunnelStage[] = ['Entrada', 'Conexão', 'Avaliação', 'Follow Up'];
-  
-  const nextStageMap: Record<string, FunnelStage> = {
-    'Entrada': 'Conexão',
-    'Conexão': 'Avaliação',
-    'Avaliação': 'Follow Up',
-    'Follow Up': 'Negócio Fechado'
-  };
-
-  const stageOrder: Record<FunnelStage, number> = {
-    'Entrada': 0,
-    'Conexão': 1,
-    'Avaliação': 2,
-    'Follow Up': 3,
-    'Negócio Fechado': 4,
-    'Negócio Perdido': 99
-  };
 
   if (hasSheetHistory) {
-    const stageMetrics: FunnelHistoryStageMetric[] = mainStages.map((stage) => {
-      const nextStage = nextStageMap[stage];
-      const recordsForStage = historyRecords.filter(r => {
-        if (r.faseAnterior) return r.faseAnterior === stage;
-        return r.faseNova === stage || (r.faseAnterior === undefined && r.faseNova === nextStage);
-      });
+    // Dynamically collect all unique (De → Para) stage transition pairs from historyRecords
+    const transitionPairs: { stage: string; nextStage: string; label: string }[] = [];
+    const pairSet = new Set<string>();
 
-      const totalProcessed = recordsForStage.length;
-      let advancedCount = 0;
-      let lostCount = 0;
-      let retainedCount = 0;
-
-      recordsForStage.forEach(r => {
-        if (r.resultado === 'Perda' || r.faseNova === 'Negócio Perdido') {
-          lostCount++;
-        } else if (r.resultado === 'Avanço' || (r.faseNova && stageOrder[r.faseNova as FunnelStage] > stageOrder[stage])) {
-          advancedCount++;
-        } else {
-          retainedCount++;
+    historyRecords.forEach((r) => {
+      if (r.faseAnterior && r.faseNova && r.faseAnterior !== r.faseNova) {
+        const key = `${r.faseAnterior} → ${r.faseNova}`;
+        if (!pairSet.has(key)) {
+          pairSet.add(key);
+          transitionPairs.push({
+            stage: r.faseAnterior,
+            nextStage: r.faseNova,
+            label: key
+          });
         }
-      });
+      }
+    });
+
+    const stageMetrics: FunnelHistoryStageMetric[] = transitionPairs.map((pair) => {
+      const matchingRecords = historyRecords.filter(
+        (r) => r.faseAnterior === pair.stage && r.faseNova === pair.nextStage
+      );
+      const totalFromStageRecords = historyRecords.filter(
+        (r) => r.faseAnterior === pair.stage
+      );
+
+      const advancedCount = matchingRecords.length;
+      const totalProcessed = totalFromStageRecords.length || advancedCount;
+
+      const isLossTransition = pair.nextStage.toLowerCase().includes('perdido') || pair.nextStage.toLowerCase().includes('perda');
+      const lostCount = isLossTransition ? advancedCount : 0;
+      const retainedCount = Math.max(0, totalProcessed - advancedCount);
 
       const advancedPct = totalProcessed > 0 ? (advancedCount / totalProcessed) * 100 : 0;
       const lostPct = totalProcessed > 0 ? (lostCount / totalProcessed) * 100 : 0;
       const retainedPct = totalProcessed > 0 ? (retainedCount / totalProcessed) * 100 : 0;
 
       return {
-        stage,
-        nextStage,
-        label: `${stage} → ${nextStage}`,
+        stage: pair.stage,
+        nextStage: pair.nextStage,
+        label: pair.label,
         totalProcessed,
         advancedCount,
         advancedPct,
@@ -754,16 +754,16 @@ export function calculateHistoryMetrics(
       };
     });
 
+    const totalEntrada = historyRecords.filter(r => r.faseAnterior === 'Entrada' || r.faseNova === 'Entrada').length || leads.length;
+    const totalClosed = historyRecords.filter(r => r.faseNova === 'Negócio Fechado').length || leads.filter(l => l.fase === 'Negócio Fechado').length;
+    const overallConversionPct = totalEntrada > 0 ? (totalClosed / totalEntrada) * 100 : 0;
+
     const totalProcessedAll = stageMetrics.reduce((sum, s) => sum + s.totalProcessed, 0);
     const totalAdvancedAll = stageMetrics.reduce((sum, s) => sum + s.advancedCount, 0);
     const totalLostAll = stageMetrics.reduce((sum, s) => sum + s.lostCount, 0);
 
     const overallAdvancementPct = totalProcessedAll > 0 ? (totalAdvancedAll / totalProcessedAll) * 100 : 0;
     const overallLossPct = totalProcessedAll > 0 ? (totalLostAll / totalProcessedAll) * 100 : 0;
-    
-    const totalEntrada = historyRecords.filter(r => r.faseAnterior === 'Entrada' || r.faseNova === 'Entrada').length || leads.length;
-    const totalClosed = historyRecords.filter(r => r.faseNova === 'Negócio Fechado').length || leads.filter(l => l.fase === 'Negócio Fechado').length;
-    const overallConversionPct = totalEntrada > 0 ? (totalClosed / totalEntrada) * 100 : 0;
 
     return {
       hasSheetHistory: true,
@@ -775,53 +775,71 @@ export function calculateHistoryMetrics(
     };
   }
 
-  // Fallback / standard derived history from current leads
-  const totalLeads = leads.length;
+  // Fallback mode when no history records exist
+  const transitionPairs: { stage: string; nextStage: string; label: string }[] = [];
+  const pairSet = new Set<string>();
 
-  const stageMetrics: FunnelHistoryStageMetric[] = mainStages.map((stage) => {
-    const nextStage = nextStageMap[stage];
-    const targetIdx = stageOrder[stage];
+  leads.forEach((l) => {
+    if (l.faseAnterior && l.fase && l.faseAnterior !== l.fase) {
+      const key = `${l.faseAnterior} → ${l.fase}`;
+      if (!pairSet.has(key)) {
+        pairSet.add(key);
+        transitionPairs.push({
+          stage: l.faseAnterior,
+          nextStage: l.fase,
+          label: key
+        });
+      }
+    }
+  });
 
+  if (transitionPairs.length === 0 && leads.length > 0) {
+    const defaultStages: FunnelStage[] = ['Entrada', 'Conexão', 'Avaliação', 'Follow Up', 'Negócio Fechado'];
+    for (let i = 0; i < defaultStages.length - 1; i++) {
+      const stage = defaultStages[i];
+      const nextStage = defaultStages[i + 1];
+      transitionPairs.push({
+        stage,
+        nextStage,
+        label: `${stage} → ${nextStage}`
+      });
+    }
+  }
+
+  const stageOrderMap: Record<string, number> = {
+    'Entrada': 0,
+    'Conexão': 1,
+    'Avaliação': 2,
+    'Follow Up': 3,
+    'Negócio Fechado': 4,
+    'Negócio Perdido': 99
+  };
+
+  const stageMetrics: FunnelHistoryStageMetric[] = transitionPairs.map((pair) => {
+    const targetIdx = stageOrderMap[pair.stage] ?? 0;
     const reachedStage = leads.filter(l => {
       if (l.fase !== 'Negócio Perdido') {
-        return stageOrder[l.fase] >= targetIdx;
+        return (stageOrderMap[l.fase] ?? 0) >= targetIdx;
       }
-      const priorIdx = stageOrder[l.faseAnterior || 'Follow Up'] ?? 3;
+      const priorIdx = l.faseAnterior ? (stageOrderMap[l.faseAnterior] ?? 0) : 0;
       return priorIdx >= targetIdx;
     });
 
     const totalProcessed = reachedStage.length;
-
-    const advancedLeads = reachedStage.filter(l => {
-      if (l.fase !== 'Negócio Perdido') {
-        return stageOrder[l.fase] > targetIdx;
-      }
-      const priorIdx = stageOrder[l.faseAnterior || 'Follow Up'] ?? 3;
-      return priorIdx > targetIdx;
-    });
-
-    const lostLeads = reachedStage.filter(l => {
-      if (l.fase === 'Negócio Perdido') {
-        const priorStage = l.faseAnterior || 'Follow Up';
-        return priorStage === stage;
-      }
-      return false;
-    });
-
-    const retainedLeads = reachedStage.filter(l => l.fase === stage);
-
+    const advancedLeads = leads.filter(l => l.faseAnterior === pair.stage && l.fase === pair.nextStage);
     const advancedCount = advancedLeads.length;
-    const lostCount = lostLeads.length;
-    const retainedCount = retainedLeads.length;
+
+    const lostCount = pair.nextStage === 'Negócio Perdido' ? advancedCount : 0;
+    const retainedCount = Math.max(0, totalProcessed - advancedCount);
 
     const advancedPct = totalProcessed > 0 ? (advancedCount / totalProcessed) * 100 : 0;
     const lostPct = totalProcessed > 0 ? (lostCount / totalProcessed) * 100 : 0;
     const retainedPct = totalProcessed > 0 ? (retainedCount / totalProcessed) * 100 : 0;
 
     return {
-      stage,
-      nextStage,
-      label: `${stage} → ${nextStage}`,
+      stage: pair.stage as FunnelStage,
+      nextStage: pair.nextStage as FunnelStage,
+      label: pair.label,
       totalProcessed,
       advancedCount,
       advancedPct,
@@ -835,8 +853,8 @@ export function calculateHistoryMetrics(
   const totalFechados = leads.filter(l => l.fase === 'Negócio Fechado').length;
   const totalPerdidos = leads.filter(l => l.fase === 'Negócio Perdido').length;
 
-  const overallConversionPct = totalLeads > 0 ? (totalFechados / totalLeads) * 100 : 0;
-  const overallLossPct = totalLeads > 0 ? (totalPerdidos / totalLeads) * 100 : 0;
+  const overallConversionPct = leads.length > 0 ? (totalFechados / leads.length) * 100 : 0;
+  const overallLossPct = leads.length > 0 ? (totalPerdidos / leads.length) * 100 : 0;
 
   const totalProcessedSum = stageMetrics.reduce((sum, s) => sum + s.totalProcessed, 0);
   const totalAdvancedSum = stageMetrics.reduce((sum, s) => sum + s.advancedCount, 0);
@@ -844,7 +862,7 @@ export function calculateHistoryMetrics(
 
   return {
     hasSheetHistory: false,
-    totalHistoryRecords: totalLeads,
+    totalHistoryRecords: leads.length,
     overallAdvancementPct,
     overallConversionPct,
     overallLossPct,

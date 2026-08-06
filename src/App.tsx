@@ -556,8 +556,8 @@ export default function App() {
               />
             </div>
 
-            {/* Main Analytics Grid: Origem dos Leads, Distribuição por Serviços, Pipeline Financeiro */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {/* Main Analytics Grid: 6 cards aligned in a responsive 3-column / 2-column grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-stretch">
               <LeadSourceChart
                 sources={leadSources}
                 selectedOrigem={filters.origem}
@@ -580,12 +580,11 @@ export default function App() {
                 activePipeline={financialPipeline.activePipeline}
                 totalPipeline={financialPipeline.totalPipeline}
               />
-            </div>
 
-            {/* Demographics & Payment Grid: Formas de Pagamento, Bairros, Faixa Etária */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               <PaymentMethodsChart paymentMethods={paymentMethods} />
+
               <NeighborhoodsChart neighborhoods={neighborhoods} />
+
               <AgeGroupsChart ageGroups={ageGroups} />
             </div>
 

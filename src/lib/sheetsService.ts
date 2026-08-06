@@ -311,11 +311,11 @@ export async function fetchHistoryFromGoogleSheet(spreadsheetId: string): Promis
 
                 const leadNome = rowMap['nome'] || rowMap['lead'] || rowMap['cliente'] || rowMap['nome do lead'] || rowMap['nome cliente'] || `Lead #${idx + 1}`;
                 
-                const rawFaseAnterior = rowMap['fase anterior'] || rowMap['fase de origem'] || rowMap['de'] || rowMap['estagio anterior'] || rowMap['fase de'] || '';
-                const rawFaseNova = rowMap['fase nova'] || rowMap['fase atual'] || rowMap['para'] || rowMap['nova fase'] || rowMap['fase'] || rowMap['etapa'] || rowMap['status'] || '';
+                const rawFaseAnterior = (rowMap['fase anterior'] || rowMap['fase de origem'] || rowMap['de'] || rowMap['estagio anterior'] || rowMap['fase de'] || '').toString().trim();
+                const rawFaseNova = (rowMap['fase nova'] || rowMap['fase atual'] || rowMap['para'] || rowMap['nova fase'] || rowMap['fase'] || rowMap['etapa'] || rowMap['status'] || '').toString().trim();
 
-                const faseAnterior = rawFaseAnterior ? parseFunnelStage(rawFaseAnterior) : undefined;
-                const faseNova = rawFaseNova ? parseFunnelStage(rawFaseNova) : 'Entrada';
+                const faseAnterior = rawFaseAnterior || undefined;
+                const faseNova = rawFaseNova || 'Entrada';
 
                 let rawResultado = rowMap['resultado'] || rowMap['acao'] || rowMap['status'] || rowMap['tipo'] || rowMap['avanco'] || rowMap['perda'] || '';
                 let resultado = 'Avanço';
