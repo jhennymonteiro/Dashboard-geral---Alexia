@@ -41,7 +41,7 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
               <div>
                 <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-                  Dashboard - Alexia MKT
+                  Dashboard - ORION Estética
                 </h1>
                 <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-medium">
                   Acompanhamento em tempo real do funil de vendas

@@ -401,7 +401,7 @@ export async function syncLeadToAppsScript(
  * Code snippet template for Google Apps Script 2-way immediate sheet synchronization
  */
 export const GOOGLE_APPS_SCRIPT_CODE = `/**
- * Código do Google Apps Script para Sincronização em Tempo Real do Dashboard - Alexia MKT
+ * Código do Google Apps Script para Sincronização em Tempo Real do Dashboard - ORION Estética
  * 
  * Instruções:
  * 1. Abra sua planilha do Google Sheets.
@@ -411,7 +411,7 @@ export const GOOGLE_APPS_SCRIPT_CODE = `/**
  * 5. Clique no ícone de engrenagem ao lado de "Selecione o tipo" e escolha "App da Web".
  * 6. Em "Quem pode acessar", selecione "Qualquer pessoa" (Qualquer um).
  * 7. Clique em "Implantar" e copie o URL do App da Web gerado.
- * 8. Cole o URL no campo "URL do Google Apps Script" no Dashboard - Alexia MKT.
+ * 8. Cole o URL no campo "URL do Google Apps Script" no Dashboard - ORION Estética.
  */
 
 function doPost(e) {
